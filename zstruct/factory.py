@@ -63,3 +63,19 @@ def make_var_array(element_field, length_field, name=None):
         LENGTH_FIELD = length_field
 
     return _
+
+
+def make_struct(struct_dict, name=None):
+    if name is None:
+        name = "STRUCTURE"
+
+    class _(field.StructField):
+        __qualname__ = name
+        __name__ = name
+        STRUCT = struct_dict
+
+    return _
+
+
+def struct(cls):
+    return make_struct(cls.__annotations__)

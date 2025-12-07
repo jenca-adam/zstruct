@@ -90,6 +90,10 @@ class SizedField(Field):
         if cls.SIZE is None:
             raise NotImplementedError
         data = stream.read(cls.SIZE)
+        if len(data) < cls.SIZE:
+            raise EOFError(
+                f"{cls.__qualname__}.parse() expected a buffer of {size} bytes, got {len(data)}"
+            )
         return cls.from_bytes(data)
 
     def unparse(self, stream):
@@ -139,9 +143,9 @@ class SingleStructField(SizedField):
         return cls(struct.unpack(cls.STRUCT, buf)[0])
 
     def to_bytes(self):
-        if cls.STRUCT is None:
+        if self.__class__.STRUCT is None:
             raise NotImplementedError
-        return struct.pack(cls.STRUCT, self.value)
+        return struct.pack(self.__class__.STRUCT, self.value)
 
     @classproperty
     def size(cls):
@@ -213,10 +217,11 @@ class UnsignedIntegerField(SizedField):
     @classproperty
     def _range(cls):
         return range((1 << (cls.SIZE * 8)))
-    
+
     @classproperty
     def _arg_type(cls):
         return int
+
 
 class SignedIntegerField(SizedField):
     """
@@ -250,14 +255,15 @@ class SignedIntegerField(SizedField):
     @classproperty
     def _range(cls):
         return range(-(1 << (cls.SIZE * 8 - 1)), (1 << (cls.SIZE * 8 - 1)))
-    
+
     @classproperty
     def _arg_type(cls):
         return int
 
+
 class StringField(Field):
     """
-    A generic field that contains size of a string, followed by the string itself.
+    A generic field that contains size of a string, followed by the string itself (pascal).
     Should be subclassed.
     Overwrite SIZE_FIELD - a Field subclass to be used for the size.
     """
@@ -277,8 +283,8 @@ class StringField(Field):
         size = cls.SIZE_FIELD.parse(stream).value
         data = stream.read(size)
         if len(data) < size:
-            raise ValueError(
-                f"{cls.__qualname__}.parse() expected a buffer of {size} bytes (size), got {len(data)}"
+            raise EOFError(
+                f"{cls.__qualname__}.parse() expected a buffer of {size} bytes, got {len(data)}"
             )
         return cls(data)
 
@@ -296,7 +302,7 @@ class StringField(Field):
 
 class ZeroTerminated(Field):
     """
-    A string field terminated by a zero byte.
+    A string field terminated by a zero byte (c).
     """
 
     @classmethod
@@ -313,7 +319,7 @@ class ZeroTerminated(Field):
                 raise EOFError("EOF while reading a zero terminated string")
             if b == b"\0":
                 break
-            res.append(ord(b))
+            res.append(b[0])
         return cls(bytes(res))
 
     def unparse(self, stream):
@@ -328,6 +334,7 @@ class ZeroTerminated(Field):
 class ArrayField(Field):
     """
     A generic field that contains a fixed number of other fields of one type.
+    Overwrite ELEMENT_FIELD, LENGTH
     """
 
     ELEMENT_FIELD = None
@@ -373,6 +380,7 @@ class VarArrayField(Field):
     """
     A generic field that contains a variable number of other fields of one type.
     The length prefixes the array data.
+    Overwrite ELEMENT_FIELD and LENGTH_FIELD.
     """
 
     ELEMENT_FIELD = None
@@ -408,6 +416,36 @@ class VarArrayField(Field):
     @classproperty
     def _arg_type(cls):
         return list
+
+
+class StructField(Field):
+    """
+    A generic field that contains a fixed number of other named fields.
+    Overwrite STRUCT: a dictionary {name: type}
+    """
+
+    STRUCT = None
+
+    def __init__(self, **value):
+        err = self.__class__._check(value)
+        self.value_dict = value
+        if err:
+            err = err.__class__(f"{self.__class__.__qualname__}: {str(err)}")
+            raise err
+        for name, val in value.items():
+            if not hasattr(self, name):
+                setattr(self, name, val)
+
+    @classmethod
+    def parse(cls, stream):
+        value_dict = {}
+        for name, field in cls.STRUCT.items():
+            value_dict[name] = field.parse(stream)
+        return cls(**value_dict)
+
+    def unparse(self, stream):
+        for name, field in self.STRUCT.items():
+            field(self.value_dict[name]).unparse(stream)
 
 
 class U8(UnsignedIntegerField):
@@ -476,7 +514,7 @@ class I64LE(SignedIntegerField):
 
 
 class I64BE(SignedIntegerField):
-    SIZE = 4
+    SIZE = 8
     ENDIAN = Endian.BIG
 
 
